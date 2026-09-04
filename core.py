@@ -83,13 +83,38 @@ def search_model(query: str, limit: int = 5):
 
 def extract_model_from_ocr_text(text: str) -> str | None:
     """
-    First tries to find the line following RUSUMI/MODELI label on an
-    O'zbekiston vehicle registration certificate (texnik pasport).
-    Falls back to fuzzy-matching every line/word-window of the OCR text
-    directly against the known car model list, since label detection is
-    unreliable on noisy phone-camera photos.
+    O'zbekiston vehicle registration certificates (texnik pasport) always
+    number their numbered fields the same way:
+      1. Davlat raqam belgisi (plate number)
+      2. Rusumi/Modeli (make/model)   <- what we want
+      3. Rangi (color)
+      4. Egasi (owner)
+      5. Manzili (address)
+      ...
+    This numbering survives OCR/layout noise far better than searching for
+    the "RUSUMI/MODELI" text label (which sits in a separate column and can
+    get matched to the wrong value line). So we look for a line starting
+    with "2" first, and only fall back to label-proximity / fuzzy matching
+    if that fails.
     """
     lines = [l.strip() for l in text.splitlines() if l.strip()]
+
+    for line in lines:
+        m = re.match(r'^2[\.\)\-:]?\s+(.{2,})$', line)
+        if m:
+            candidate = m.group(1).strip()
+            compact = candidate.replace(" ", "")
+            # sanity check: a plate number has no spaces and mixes digits
+            # with letters (e.g. "90R252XA") — a model name doesn't look
+            # like that, so skip only in that specific case.
+            looks_like_plate = (
+                " " not in candidate
+                and any(c.isdigit() for c in compact)
+                and any(c.isalpha() for c in compact)
+                and 5 <= len(compact) <= 9
+            )
+            if not looks_like_plate:
+                return candidate
 
     for i, line in enumerate(lines):
         upper = line.upper()
