@@ -82,7 +82,15 @@ def search_model(query: str, limit: int = 5):
 
 
 def extract_model_from_ocr_text(text: str) -> str | None:
+    """
+    First tries to find the line following RUSUMI/MODELI label on an
+    O'zbekiston vehicle registration certificate (texnik pasport).
+    Falls back to fuzzy-matching every line/word-window of the OCR text
+    directly against the known car model list, since label detection is
+    unreliable on noisy phone-camera photos.
+    """
     lines = [l.strip() for l in text.splitlines() if l.strip()]
+
     for i, line in enumerate(lines):
         upper = line.upper()
         if "RUSUMI" in upper or "MODELI" in upper or "МОДЕЛЬ" in upper:
@@ -91,4 +99,17 @@ def extract_model_from_ocr_text(text: str) -> str | None:
                 return m.group(1).strip()
             if i + 1 < len(lines):
                 return lines[i + 1]
+
+    # Fallback: fuzzy-match every line directly against known models.
+    best_name, best_score = None, 0
+    for line in lines:
+        nline = _normalize(line)
+        if len(nline) < 3:
+            continue
+        for name, nname in _NORM_INDEX.items():
+            score = fuzz.token_sort_ratio(nline, nname)
+            if score > best_score:
+                best_name, best_score = name, score
+    if best_score >= 78:
+        return best_name
     return None

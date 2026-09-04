@@ -63,7 +63,7 @@ async def start_handler(message: Message):
 async def photo_handler(message: Message):
     try:
         import pytesseract
-        from PIL import Image
+        from PIL import Image, ImageOps, ImageFilter
     except ImportError:
         await message.answer(
             "OCR kutubxonalari o'rnatilmagan. Iltimos, mashina nomini matn ko'rinishida yuboring."
@@ -78,15 +78,47 @@ async def photo_handler(message: Message):
 
     await message.answer("🔎 Rasmni o'qiyapman...")
 
-    img = Image.open(buf)
-    text = pytesseract.image_to_string(img, lang="uzb+rus+eng")
+    base = Image.open(buf).convert("L")
+    if max(base.size) < 2200:
+        scale = 2200 / max(base.size)
+        base = base.resize((int(base.width * scale), int(base.height * scale)), Image.LANCZOS)
+    base = ImageOps.autocontrast(base)
+    base = base.filter(ImageFilter.SHARPEN)
+
+    # Photos of ID/registration documents often come in rotated — try all
+    # four orientations and keep the one Tesseract is most confident about.
+    best_img, best_conf = base, -1.0
+    for angle in (0, 90, 180, 270):
+        candidate_img = base.rotate(angle, expand=True) if angle else base
+        try:
+            data = pytesseract.image_to_data(
+                candidate_img, lang="eng", output_type=pytesseract.Output.DICT
+            )
+            confs = [int(c) for c in data["conf"] if c not in ("-1", -1)]
+            avg_conf = sum(confs) / len(confs) if confs else 0.0
+        except pytesseract.TesseractError:
+            avg_conf = -1.0
+        if avg_conf > best_conf:
+            best_conf, best_img = avg_conf, candidate_img
+
+    text = ""
+    for lang in ("uzb+rus+eng", "rus+eng", "eng"):
+        try:
+            text = pytesseract.image_to_string(best_img, lang=lang)
+            if text.strip():
+                break
+        except pytesseract.TesseractError:
+            continue
 
     candidate = extract_model_from_ocr_text(text)
     if not candidate:
+        snippet = text.strip()[:400]
+        hint = f"\n\nO'qilgan matn (tekshirib ko'ring):\n<code>{snippet}</code>" if snippet else ""
         await message.answer(
             "Kechirasiz, rasmdan model nomini aniq o'qiy olmadim. "
             "Iltimos, mashina markasi va modelini matn qilib yozib yuboring "
-            "(masalan: <i>BYD Yuan Up</i>).",
+            "(masalan: <i>BYD Yuan Up</i>)."
+            + hint,
             parse_mode="HTML",
         )
         return
